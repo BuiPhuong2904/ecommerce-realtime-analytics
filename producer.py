@@ -1,45 +1,24 @@
-import pandas as pd
-import time
 import json
+import time
+import pandas as pd
 from kafka import KafkaProducer
 
-# CẤU HÌNH KAFKA
-# Thay 'IP_AZURE_CUA_BAN' bằng địa chỉ IP Public của máy ảo VM Đông Nam Á
-KAFKA_BROKER = 'IP_AZURE_CUA_BAN:9092' 
-TOPIC_NAME = 'ecommerce_events'
+# 1. Cấu hình kết nối tới Kafka trên Azure
+producer = KafkaProducer(
+    bootstrap_servers=['74.176.216.15:9092'],
+    value_serializer=lambda x: json.dumps(x).encode('utf-8')
+)
 
-print("Đang kết nối tới Kafka...")
-try:
-    producer = KafkaProducer(
-        bootstrap_servers=[KAFKA_BROKER],
-        value_serializer=lambda v: json.dumps(v).encode('utf-8')
-    )
-    print("Kết nối Kafka thành công!")
-except Exception as e:
-    print(f"Chưa kết nối được Kafka. Lỗi: {e}")
+csv_file_path = r'D:\Do_An\IS402_DTDM\Seminar\Data\2019-Oct.csv' 
 
-chunk_size = 10000
-file_path = "../archive/2019-Oct.csv"
+print("Đang nạp dữ liệu, quá trình này có thể mất chút thời gian tùy thuộc vào RAM máy tính...")
 
-print(f"Bắt đầu đọc và đẩy stream từ {file_path}...")
-try:
-    for chunk in pd.read_csv(file_path, chunksize=chunk_size):
-        # Lặp qua từng dòng trong chunk
-        for index, row in chunk.iterrows():
-            # Chuyển dòng dữ liệu thành dictionary
-            data = row.to_dict()
-            # Gửi dữ liệu lên Kafka
-            producer.send(TOPIC_NAME, value=data)
-        
-        # Đẩy dữ liệu đi ngay lập tức
-        producer.flush()
-        print(f"Đã bắn thành công {len(chunk)} dòng sự kiện lên topic '{TOPIC_NAME}'.")
-        
-        # Tạm dừng 1 giây để mô phỏng real-time
-        time.sleep(1)
-        
-        # Tạm thời vẫn giữ lệnh break để test chunk đầu tiên
-        break 
-        
-except FileNotFoundError:
-    print("Lỗi: Không tìm thấy file dữ liệu.")
+chunksize = 1000 
+for chunk in pd.read_csv(csv_file_path, chunksize=chunksize):
+    for index, row in chunk.iterrows():
+        event_data = row.dropna().to_dict()
+        producer.send('ecommerce-events', value=event_data)
+        print(f"Đã gửi sự kiện: {event_data.get('event_type', 'N/A')} - Sản phẩm: {event_data.get('product_id', 'N/A')}")
+        time.sleep(0.05) 
+
+print("Đã hoàn tất quá trình stream toàn bộ dữ liệu!")
