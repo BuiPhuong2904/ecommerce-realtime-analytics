@@ -1,9 +1,3 @@
-"""
-chạy:
-  python producer_v2.py --limit 5000 --rate 200       # demo, giả lập thời gian thực
-  python producer_v2.py --limit 200000 --rate 0       # đo throughput (nhanh nhất có thể)
-  python producer_v2.py --limit 200000 --rate 0 --compression gzip --linger-ms 50
-"""
 import argparse
 import json
 import time
@@ -12,12 +6,12 @@ from itertools import islice
 import pandas as pd
 from kafka import KafkaProducer
 
-TOPIC = 'ecommerce-events'
 DEFAULT_CSV = r'D:\Do_An\IS402_DTDM\Seminar\Data\2019-Oct.csv'
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--csv', default=DEFAULT_CSV, help='đường dẫn file CSV')
 parser.add_argument('--server', default='74.176.216.15:9092', help='địa chỉ Kafka broker')
+parser.add_argument('--topic', default='ecommerce-events', help='tên topic cần gửi')
 parser.add_argument('--rate', type=float, default=100,
                     help='số tin/giây; 0 = gửi nhanh nhất có thể')
 parser.add_argument('--limit', type=int, default=0,
@@ -51,6 +45,12 @@ producer = KafkaProducer(
 )
 
 errors = 0
+acked = 0
+
+
+def on_ack(_metadata):
+    global acked
+    acked += 1
 
 
 def on_error(exc):
@@ -68,14 +68,15 @@ def events():
 log_every = 1000 if args.rate > 0 else 50000
 sent = 0
 start = time.time()
-print(f'Bắt đầu gửi lên {args.server}, topic {TOPIC} '
+print(f'Bắt đầu gửi lên {args.server}, topic {args.topic} '
       f'(rate={args.rate}, limit={args.limit or "toàn bộ file"}, '
       f'linger_ms={args.linger_ms}, batch_size={args.batch_size}, '
       f'compression={args.compression})')
 
 try:
     for event in islice(events(), args.limit or None):
-        producer.send(TOPIC, key=event.get('user_session'), value=event).add_errback(on_error)
+        producer.send(args.topic, key=event.get('user_session'), value=event) \
+            .add_callback(on_ack).add_errback(on_error)
         sent += 1
 
         if args.rate > 0:
@@ -85,12 +86,13 @@ try:
 
         if sent % log_every == 0:
             elapsed = time.time() - start
-            print(f'Đã gửi {sent:,} tin | {sent / elapsed:,.0f} tin/giây | lỗi: {errors}')
+            print(f'Đã đưa vào hàng đợi {sent:,} tin | broker đã xác nhận {acked:,} tin '
+                  f'({acked / elapsed:,.0f} tin/giây) | lỗi: {errors}')
 except KeyboardInterrupt:
     print('Đã dừng bằng tay (Ctrl+C).')
 finally:
     producer.flush()
     elapsed = max(time.time() - start, 1e-9)
-    print(f'XONG: {sent:,} tin trong {elapsed:.1f} giây '
+    print(f'XONG: {sent:,} tin ({acked:,} đã được xác nhận) trong {elapsed:.1f} giây '
           f'({sent / elapsed:,.0f} tin/giây), lỗi: {errors}')
     producer.close()
