@@ -1,5 +1,7 @@
 import argparse
+import csv
 import json
+import os
 import time
 from itertools import islice
 
@@ -22,6 +24,8 @@ parser.add_argument('--batch-size', type=int, default=16384,
                     help='kích thước batch (byte)')
 parser.add_argument('--compression', default=None, choices=['gzip'],
                     help='nén dữ liệu khi gửi (mặc định: không nén)')
+parser.add_argument('--results-csv', default='producer_results.csv',
+                    help='file ghi kết quả mỗi lần chạy (thêm dòng mới vào cuối); để rỗng nếu không muốn ghi')
 args = parser.parse_args()
 
 
@@ -59,7 +63,6 @@ def on_error(exc):
 
 
 def events():
-    """Đọc CSV theo từng khối, trả về từng sự kiện (bỏ các cột bị thiếu)."""
     for chunk in pd.read_csv(args.csv, chunksize=10000):
         for rec in chunk.to_dict('records'):
             yield {k: v for k, v in rec.items() if pd.notna(v)}
@@ -95,4 +98,29 @@ finally:
     elapsed = max(time.time() - start, 1e-9)
     print(f'XONG: {sent:,} tin ({acked:,} đã được xác nhận) trong {elapsed:.1f} giây '
           f'({sent / elapsed:,.0f} tin/giây), lỗi: {errors}')
+    try:
+        m = producer.metrics().get('producer-metrics', {})
+
+        def g(key):
+            v = m.get(key)
+            return f'{v:,.2f}' if isinstance(v, (int, float)) else 'n/a'
+
+        print(f'Chỉ số producer: batch TB {g("batch-size-avg")} byte | '
+              f'{g("records-per-request-avg")} tin/request | '
+              f'tỉ lệ nén {g("compression-rate-avg")} (sau nén / trước nén) | '
+              f'độ trễ request TB {g("request-latency-avg")} ms')
+    except Exception:
+        pass
     producer.close()
+
+    if args.results_csv:
+        new_file = not os.path.exists(args.results_csv)
+        with open(args.results_csv, 'a', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            if new_file:
+                w.writerow(['thoi_diem', 'server', 'topic', 'so_tin', 'da_xac_nhan', 'loi', 'linger_ms',
+                            'batch_size', 'nen', 'rate', 'giay', 'tin_moi_giay'])
+            w.writerow([time.strftime('%Y-%m-%d %H:%M:%S'), args.server, args.topic, sent, acked, errors,
+                        args.linger_ms, args.batch_size, args.compression or 'none', args.rate,
+                        round(elapsed, 2), round(sent / elapsed, 1)])
+        print(f'Đã ghi kết quả vào {args.results_csv}')
